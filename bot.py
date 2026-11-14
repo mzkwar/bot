@@ -214,15 +214,37 @@ def handle_messages():
                 if not message_text:
                     continue
                 
-                # التحقق مما إذا كانت الرسالة مرسلة في محادثة خاصة (Direct Message) وليس في مجموعة
                 is_private_chat = "message" in messaging and "is_echo" not in messaging and sender_id != recipient_id
                 
-                # أمر مؤقت لمعرفة اليد الشخصي (ID)
+                # أمر معرف الـ ID
                 if message_text.lower() == "id":
                     send_fb_message(sender_id, f"معرفك الشخصي هو: {sender_id}")
                     continue
 
-                # 1. الاستجابة لكلمة "رصيد" (متاحة في الخاص أو المجموعات)
+                # فحص إذا كان المدير في وضع إدخال بيانات معلقة
+                current_state = get_setting(f"state_{sender_id}")
+                
+                if sender_id == ADMIN_FB_ID and is_private_chat and current_state:
+                    lines = message_text.splitlines()
+                    if len(lines) >= 2:
+                        u, p = lines[0].strip(), lines[1].strip()
+                        if current_state == "waiting_towers":
+                            set_setting("towers_user", cipher.encrypt(u.encode()).decode())
+                            set_setting("towers_pass", cipher.encrypt(p.encode()).decode())
+                            send_fb_message(sender_id, "✅ تم حفظ وتشفير حساب الأبراج بنجاح!")
+                        elif current_state == "waiting_ftth":
+                            set_setting("ftth_user", cipher.encrypt(u.encode()).decode())
+                            set_setting("ftth_pass", cipher.encrypt(p.encode()).decode())
+                            send_fb_message(sender_id, "✅ تم حفظ وتشفير حساب FTTH بنجاح!")
+                        
+                        # مسح الحالة بعد الحفظ
+                        set_setting(f"state_{sender_id}", "")
+                        continue
+                    else:
+                        send_fb_message(sender_id, "❌ يرجى إرسال اليوزر وكلمة المرور في سطرين منفصلين كما طلبنا.")
+                        continue
+
+                # 1. الاستجابة لكلمة "رصيد"
                 if message_text.lower() in ["رصيد", "الرصيد", "balance"]:
                     t_bal = get_towers_balance()
                     f_bal = get_ftth_balance()
@@ -236,60 +258,39 @@ def handle_messages():
                     
                     send_fb_message(sender_id, reply)
                 
-                # 2. أوامر الإدارة العربية (مشروطة بأن تكون حصراً في الرسائل الخاصة + مطابقة ايدي المدير)
+                # 2. أوامر الإدارة وتفعيل الحالات الخاصة
                 elif sender_id == ADMIN_FB_ID and is_private_chat:
-                    parts = message_text.split()
-                    if not parts:
-                        continue
-                    
-                    full_cmd = f"{parts[0]} {parts[1]}" if len(parts) > 1 else parts[0]
-                    
-                    if full_cmd == "تعيين مستخدم الأبراج" and len(parts) > 2:
-                        set_setting("towers_user", cipher.encrypt(parts[2].encode()).decode())
-                        send_fb_message(sender_id, "✅ تم حفظ اسم مستخدم الأبراج مشفراً.")
+                    if message_text.lower() == "تعيين الأبراج":
+                        set_setting(f"state_{sender_id}", "waiting_towers")
+                        send_fb_message(sender_id, "يرجى إرسال يوزر وكلمة السر بهذا الشكل:\nuser\npass")
+                    elif message_text.lower() == "تعيين ftth":
+                        set_setting(f"state_{sender_id}", "waiting_ftth")
+                        send_fb_message(sender_id, "يرجى إرسال يوزر وكلمة السر بهذا الشكل:\nuser\npass")
+                    else:
+                        parts = message_text.split()
+                        if not parts:
+                            continue
                         
-                    elif full_cmd == "تعيين كلمة مرور الأبراج" and len(parts) > 3:
-                        set_setting("towers_pass", cipher.encrypt(parts[3].encode()).decode())
-                        send_fb_message(sender_id, "✅ تم حفظ كلمة مرور الأبراج مشفرة.")
-                        
-                    elif full_cmd.lower() == "تعيين مستخدم ftth" and len(parts) > 2:
-                        set_setting("ftth_user", cipher.encrypt(parts[2].encode()).decode())
-                        send_fb_message(sender_id, "✅ تم حفظ اسم مستخدم FTTH مشفراً.")
-                        
-                    elif full_cmd.lower() == "تعيين كلمة مرور ftth" and len(parts) > 3:
-                        set_setting("ftth_pass", cipher.encrypt(parts[3].encode()).decode())
-                        send_fb_message(sender_id, "✅ تم حفظ كلمة مرور FTTH مشفرة.")
-                        
-                    elif parts[0] == "تعيين" and parts[1] == "الحد" and len(parts) > 2:
-                        try:
-                            new_limit = int(parts[2])
-                            set_setting("threshold_limit", str(new_limit))
-                            send_fb_message(sender_id, f"✅ تم تحديث حد التحذير ليصبح: {new_limit:,.0f} دينار")
-                        except ValueError:
-                            send_fb_message(sender_id, "❌ خطأ: يرجى إرسال رقم صحيح. مثال: `تعيين الحد 300000`")
+                        if parts[0] == "تعيين" and parts[1] == "الحد" and len(parts) > 2:
+                            try:
+                                new_limit = int(parts[2])
+                                set_setting("threshold_limit", str(new_limit))
+                                send_fb_message(sender_id, f"✅ تم تحديث حد التحذير ليصبح: {new_limit:,.0f} دينار")
+                            except ValueError:
+                                send_fb_message(sender_id, "❌ خطأ: يرجى إرسال رقم صحيح. مثال: `تعيين الحد 300000`")
+                                
+                        elif len(parts) >= 2 and f"{parts[0]} {parts[1]}" == "إضافة مجموعة":
+                            db_execute("INSERT OR IGNORE INTO groups (id) VALUES (?)", (parts[2],))
+                            send_fb_message(sender_id, f"✅ تمت إضافة المجموعة برقم: {parts[2]}")
                             
-                    elif full_cmd == "إضافة مجموعة" and len(parts) > 2:
-                        db_execute("INSERT OR IGNORE INTO groups (id) VALUES (?)", (parts[2],))
-                        send_fb_message(sender_id, f"✅ تمت إضافة المجموعة برقم: {parts[2]}")
-                        
-                    elif full_cmd == "حذف مجموعة" and len(parts) > 2:
-                        db_execute("DELETE FROM groups WHERE id = ?", (parts[2],))
-                        send_fb_message(sender_id, f"🗑️ تم حذف المجموعة برقم: {parts[2]}")
-                        
-                    elif full_cmd == "عرض المجموعات":
-                        groups = db_execute("SELECT id FROM groups", fetch=True)
-                        g_list = "\n".join([g[0] for g in groups]) or "لا توجد مجموعات مضافة."
-                        send_fb_message(sender_id, f"📋 المجموعات المضافة:\n{g_list}")
-                        
-                    elif parts[0] == "إضافة" and parts[1] == "شخص" and len(parts) > 3:
-                        uid, name = parts[2], parts[3]
-                        db_execute("INSERT OR REPLACE INTO users (id, name) VALUES (?, ?)", (uid, name))
-                        send_fb_message(sender_id, f"✅ تم إضافة المشترك {name}")
-                        
-                    elif parts[0] == "حذف" and parts[1] == "شخص" and len(parts) > 2:
-                        uid = parts[2]
-                        db_execute("DELETE FROM users WHERE id = ?", (uid,))
-                        send_fb_message(sender_id, f"🗑️ تم حذف المستخدم برقم: {uid}")
+                        elif len(parts) >= 2 and f"{parts[0]} {parts[1]}" == "حذف مجموعة":
+                            db_execute("DELETE FROM groups WHERE id = ?", (parts[2],))
+                            send_fb_message(sender_id, f"🗑️ تم حذف المجموعة برقم: {parts[2]}")
+                            
+                        elif message_text.lower() == "عرض المجموعات":
+                            groups = db_execute("SELECT id FROM groups", fetch=True)
+                            g_list = "\n".join([g[0] for g in groups]) or "لا توجد مجموعات مضافة."
+                            send_fb_message(sender_id, f"📋 المجموعات المضافة:\n{g_list}")
 
     return jsonify({"status": "ok"}), 200
 
