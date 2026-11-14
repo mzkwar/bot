@@ -217,6 +217,11 @@ def handle_messages():
                 # التحقق مما إذا كانت الرسالة مرسلة في محادثة خاصة (Direct Message) وليس في مجموعة
                 is_private_chat = "message" in messaging and "is_echo" not in messaging and sender_id != recipient_id
                 
+                # أمر مؤقت لمعرفة اليد الشخصي (ID)
+                if message_text.lower() == "id":
+                    send_fb_message(sender_id, f"معرفك الشخصي هو: {sender_id}")
+                    continue
+
                 # 1. الاستجابة لكلمة "رصيد" (متاحة في الخاص أو المجموعات)
                 if message_text.lower() in ["رصيد", "الرصيد", "balance"]:
                     t_bal = get_towers_balance()
