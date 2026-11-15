@@ -91,6 +91,8 @@ def get_towers_balance():
     options.add_argument("--headless")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--disable-gpu")
+    options.binary_location = "/usr/bin/chromium"  # مسار الكروم على Render
     
     driver = webdriver.Chrome(options=options)
     try:
@@ -122,6 +124,8 @@ def get_ftth_balance():
     options.add_argument("--headless")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--disable-gpu")
+    options.binary_location = "/usr/bin/chromium"  # مسار الكروم على Render
     
     driver = webdriver.Chrome(options=options)
     try:
@@ -237,11 +241,10 @@ def handle_messages():
                             set_setting("ftth_pass", cipher.encrypt(p.encode()).decode())
                             send_fb_message(sender_id, "✅ تم حفظ وتشفير حساب FTTH بنجاح!")
                         
-                        # مسح الحالة بعد الحفظ
                         set_setting(f"state_{sender_id}", "")
                         continue
                     else:
-                        send_fb_message(sender_id, "❌ يرجى إرسال اليوزر وكلمة المرور في سطرين منفصلين كما طلبنا.")
+                        send_fb_message(sender_id, "❌ يرجى إرسال اليوزر وكلمة المرور في سطرين منفصلين.")
                         continue
 
                 # 1. الاستجابة لكلمة "رصيد"
