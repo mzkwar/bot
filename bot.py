@@ -1,25 +1,23 @@
 import os
 import sqlite3
+import time
 import requests
 from flask import Flask, render_template_string, request, jsonify
 
 app = Flask(__name__)
 
-# ضعنا التوكن الذي أرسلته مباشرة في الكود أو كمتغير بيئة
 PAGE_ACCESS_TOKEN = os.getenv("PAGE_ACCESS_TOKEN", "EAArK8Mlf8H4BS2PaVN9bh8mS3A3TsZCFhET7Jf5koMIGxykLgOTzO7c7rKWbnukhIzyMUfgZBMVvXUtjfZAPQ5ZCFK6sTDFGuHWiUhRW1J8iahNRnqIjCwf8bXBc3C0pIz1m4jzmns71VIe5ZBZAJK3BZCsur6Vasp72Gen5ZBZCOH5ngZBDrvZBoLSZBVXi69nxIaJag9XQvJGu3bKiZCLzejA6M")
 VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "my_secure_verify_token")
 
-# قائمة مؤقتة لتخزين آخر الـ Logs وعرضها على الشاشة
 SYSTEM_LOGS = []
 
 def add_log(message):
     global SYSTEM_LOGS
-    print(message)  # يطبع أيضاً في الـ Console الخاص بـ Render
+    print(message)
     SYSTEM_LOGS.insert(0, message)
-    if len(SYSTEM_LOGS) > 50:  # الاحتفاظ بآخر 50 سجل فقط
+    if len(SYSTEM_LOGS) > 50:
         SYSTEM_LOGS.pop()
 
-# --- إعداد قاعدة البيانات المحلية لـ حد التنبيه فقط ---
 def init_db():
     conn = sqlite3.connect("system_database.db", check_same_thread=False)
     cursor = conn.cursor()
@@ -51,26 +49,26 @@ def send_fb_message(recipient_id, text):
     response = requests.post(url, json=payload)
     add_log(f"FB Send Response: {response.status_code}, {response.text}")
 
-# --- جلب رصيد FTTH مباشرة من الـ API الخاص بك ---
+# --- جلب رصيد FTTH مع نظام إعادة المحاولة التلقائي (Retry) لتجنب انقطاع الاتصال ---
 def get_ftth_balance():
-    try:
-        api_url = "https://war.ct.ws/api_balance.php?api_key=my_super_secret_key_1995"
-        response = requests.get(api_url, timeout=15)
-        
-        if response.status_code == 200:
-            data = response.json()
-            balance = data.get("model", {}).get("balance", 0)
-            return int(float(balance))
+    api_url = "https://war.ct.ws/api_balance.php?api_key=my_super_secret_key_1995"
+    retries = 3
+    for attempt in range(retries):
+        try:
+            response = requests.get(api_url, timeout=10)
+            if response.status_code == 200:
+                data = response.json()
+                balance = data.get("model", {}).get("balance", 0)
+                return int(float(balance))
+        except Exception as e:
+            add_log(f"API Attempt {attempt + 1} failed: {e}")
+            time.sleep(1) # الانتظار ثانية واحدة قبل إعادة المحاولة
             
-        return "خطأ في الاستجابة من الـ API"
-    except Exception as e:
-        add_log(f"API Exception Error: {e}")
-        return "خطأ في الاتصال بالخادم"
+    return "خطأ في الاتصال بالخادم"
 
 def get_towers_balance():
     return "قيد التحديث"
 
-# --- واجهة الويب لعرض الـ LOGS فقط ---
 LOGS_HTML = """
 <!DOCTYPE html>
 <html lang="ar" dir="rtl">
@@ -78,7 +76,7 @@ LOGS_HTML = """
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>سجلات النظام - Logs</title>
-    <meta http-equiv="refresh" content="5"> <!-- تحديث الصفحة تلقائياً كل 5 ثوانٍ -->
+    <meta http-equiv="refresh" content="5">
     <style>
         body { font-family: 'Courier New', Courier, monospace; background: #1e1e1e; color: #00ff66; margin: 0; padding: 20px; }
         .wrapper { max-width: 900px; margin: auto; background: #2d2d2d; padding: 25px; border-radius: 8px; box-shadow: 0 4px 15px rgba(0,0,0,0.5); }
