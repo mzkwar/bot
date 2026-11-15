@@ -63,7 +63,7 @@ def send_fb_message(recipient_id, text):
     }
     requests.post(url, json=payload)
 
-# --- جلب رصيد FTTH عبر الـ API الرسمي الذي اكتشفته ---
+# --- جلب رصيد FTTH عبر الـ API الرسمي مع رؤوس الطلبات الكاملة ---
 def get_ftth_balance():
     u, p = get_decrypted_credential("ftth")
     if not u or not p:
@@ -78,54 +78,55 @@ def get_ftth_balance():
         }
         headers = {
             "Content-Type": "application/x-www-form-urlencoded",
-            "Accept": "application/json"
+            "Accept": "application/json",
+            "Origin": "https://admin.ftth.iq",
+            "Referer": "https://admin.ftth.iq/"
         }
         
         # 1. طلب الـ Token
         response = requests.post(token_url, data=payload, headers=headers, timeout=15)
         if response.status_code != 200:
-            return "خطأ في تسجيل الدخول أو كلمة المرور"
+            return "خطأ في بيانات الدخول"
             
         token_data = response.json()
         access_token = token_data.get("access_token")
         
         if not access_token:
-            return "فشل في الحصول على رمز المصادقة"
+            return "فشل في الحصول على المصادقة"
             
         # 2. جلب بيانات الحساب والرصيد باستخدام الـ Token
         balance_headers = {
             "Authorization": f"Bearer {access_token}",
-            "Accept": "application/json"
+            "Accept": "application/json",
+            "Origin": "https://admin.ftth.iq",
+            "Referer": "https://admin.ftth.iq/"
         }
         
         profile_response = requests.get("https://admin.ftth.iq/api/contractor/profile", headers=balance_headers, timeout=15)
         
         if profile_response.status_code == 200:
             data = profile_response.json()
-            balance = data.get("balance", data.get("AccountBalance", 0))
+            balance = data.get("balance", data.get("AccountBalance", data.get("amount", 0)))
             return int(float(balance))
             
-        return "تعذر جلب بيانات الرصيد"
+        return "تعذر جلب الرصيد"
     except Exception as e:
         print(f"FTTH API Error: {e}")
         return "خطأ في الاتصال بالخادم"
 
-# --- دالة رصيد الأبراج (تستخدم نفس هيكلية الـ API أو الجلسة النظيفة) ---
+# --- دالة رصيد الأبراج ---
 def get_towers_balance():
     u, p = get_decrypted_credential("towers")
     if not u or not p:
         return "غير مُعرّف"
     try:
-        # محاولة استخدام نفس نقطة المصادقة المباشرة للأبراج إن وجدت، أو Session خفيفة
         session = requests.Session()
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
         }
-        # جلب الصفحة الرئيسية للأبراج
         resp = session.get("https://admin.earthlink.iq/Home.aspx", headers=headers, timeout=15)
         if resp.status_code == 200:
-            # عودة مؤقتة أو قراءة الرصيد إن وُجد في الصفحة بعد نجاح الدخول بـ API مشابه
             return "قيد التحديث (API الأبراج)"
         return "خطأ في الاتصال"
     except Exception as e:
