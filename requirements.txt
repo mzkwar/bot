@@ -2,5 +2,4 @@ Flask
 requests
 selenium
 cryptography
-webdriver-manager
 gunicorn
