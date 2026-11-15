@@ -71,13 +71,13 @@ def get_ftth_balance():
         
         if response.status_code == 200:
             data = response.json()
-            # استخراج الرصيد بناءً على شكل الرد القادم من الـ API الخاص بك
-            balance = data.get("balance", data.get("amount", data.get("result", 0)))
+            # استخراج الرصيد بالشكل الصحيح من داخل الـ model
+            balance = data.get("model", {}).get("balance", 0)
             return int(float(balance))
             
         return "خطأ في الاستجابة من الـ API"
     except Exception as e:
-        print(f"API Error: {e}")
+        print(f"API Exception Error: {e}")
         return "خطأ في الاتصال بالخادم"
 
 # --- دالة رصيد الأبراج ---
