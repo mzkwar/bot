@@ -1,30 +1,26 @@
 import os
 import sqlite3
-import threading
-import time
-import urllib.request
 import requests
-from flask import Flask, request, jsonify, render_template_string, redirect, url_for, session
+from bs4 import BeautifulSoup
+from flask import Flask, render_template_string, request, redirect, url_for, session, jsonify
 from cryptography.fernet import Fernet
 
 app = Flask(__name__)
-app.secret_key = os.getenv("FLASK_SECRET_KEY", "super_secure_admin_secret_key_123")
+app.secret_key = os.getenv("FLASK_SECRET_KEY", "mahdi_secure_secret_key_9988")
 
-# إعدادات فيسبوك أساسية
-PAGE_ACCESS_TOKEN = os.getenv("PAGE_ACCESS_TOKEN")
-VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "my_secure_verify_token")
-ADMIN_FB_ID = os.getenv("ADMIN_FB_ID")
-WEB_ADMIN_PASSWORD = os.getenv("WEB_ADMIN_PASSWORD", "admin123") # كلمة مرور لوحة التحكم
-
+# إعدادات الأمان وتشفير قواعد البيانات
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")
 ENCRYPTION_KEY = Fernet.generate_key()
 cipher = Fernet(ENCRYPTION_KEY)
 
+# إعدادات فيسبوك ماسنجر الأساسية
+PAGE_ACCESS_TOKEN = os.getenv("PAGE_ACCESS_TOKEN")
+VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "my_secure_verify_token")
+
 # --- إعداد قاعدة البيانات المحلية ---
 def init_db():
-    conn = sqlite3.connect("bot_database.db", check_same_thread=False)
+    conn = sqlite3.connect("system_database.db", check_same_thread=False)
     cursor = conn.cursor()
-    cursor.execute('''CREATE TABLE IF NOT EXISTS groups (id TEXT PRIMARY KEY)''')
-    cursor.execute('''CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, name TEXT)''')
     cursor.execute('''CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)''')
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('threshold_limit', '300000')")
     conn.commit()
@@ -32,26 +28,34 @@ def init_db():
 
 init_db()
 
-def db_execute(query, params=(), fetch=False):
-    conn = sqlite3.connect("bot_database.db", check_same_thread=False)
+def get_db_value(key):
+    conn = sqlite3.connect("system_database.db", check_same_thread=False)
     cursor = conn.cursor()
-    cursor.execute(query, params)
-    result = None
-    if fetch:
-        result = cursor.fetchall()
+    cursor.execute("SELECT value FROM settings WHERE key = ?", (key,))
+    res = cursor.fetchone()
+    conn.close()
+    return res[0] if res else None
+
+def set_db_value(key, value):
+    conn = sqlite3.connect("system_database.db", check_same_thread=False)
+    cursor = conn.cursor()
+    cursor.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, value))
     conn.commit()
     conn.close()
-    return result
 
-def get_setting(key):
-    res = db_execute("SELECT value FROM settings WHERE key = ?", (key,), fetch=True)
-    if res:
-        return res[0][0]
-    return None
+def get_decrypted_credential(prefix):
+    enc_u = get_db_value(f"{prefix}_user")
+    enc_p = get_db_value(f"{prefix}_pass")
+    if not enc_u or not enc_p:
+        return None, None
+    try:
+        user = cipher.decrypt(enc_u.encode()).decode()
+        pwd = cipher.decrypt(enc_p.encode()).decode()
+        return user, pwd
+    except:
+        return None, None
 
-def set_setting(key, value):
-    db_execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, value))
-
+# --- إرسال الرسائل عبر فيسبوك ماسنجر ---
 def send_fb_message(recipient_id, text):
     if not PAGE_ACCESS_TOKEN:
         return
@@ -63,104 +67,144 @@ def send_fb_message(recipient_id, text):
     }
     requests.post(url, json=payload)
 
-def get_credentials(system_prefix):
-    encrypted_user = get_setting(f"{system_prefix}_user")
-    encrypted_pass = get_setting(f"{system_prefix}_pass")
-    if not encrypted_user or not encrypted_pass:
-        return None, None
+# --- دالة جلب الأرصدة النظيفة والسريعة (باستخدام Requests Session و BeautifulSoup) ---
+def fetch_balance_clean(url, username, password):
     try:
-        username = cipher.decrypt(encrypted_user.encode()).decode()
-        password = cipher.decrypt(encrypted_pass.encode()).decode()
-        return username, password
-    except:
-        return None, None
+        session = requests.Session()
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+            "Accept-Language": "ar,en-US;q=0.7,en;q=0.3"
+        }
+        
+        # 1. فتح الصفحة الرئيسية لجلب رموز الحماية والجلسة
+        response = session.get(url, headers=headers, timeout=15)
+        soup = BeautifulSoup(response.text, 'html.parser')
+        
+        payload = {}
+        for input_tag in soup.find_all('input'):
+            name = input_tag.get('name')
+            value = input_tag.get('value', '')
+            if name:
+                payload[name] = value
+                
+        # حقن بيانات الاعتماد
+        payload.update({
+            "Login1$UserName": username,
+            "Login1$Password": password,
+            "Login1$LoginButton": "Log In"
+        })
 
-# --- محاكاة جلب الأرصدة (أو دمج الطريقة الخاصة بك) ---
+        # 2. إرسال طلب تسجيل الدخول POST
+        session.post(url, data=payload, headers=headers, timeout=15)
+        
+        # 3. زيارة صفحة اللوحة مجدداً بعد نجاح الدخول لجلب الرصيد
+        dash_response = session.get(url, headers=headers, timeout=15)
+        dash_soup = BeautifulSoup(dash_response.text, 'html.parser')
+        
+        # البحث عن عنصر الرصيد (span.amount.xxl)
+        balance_element = dash_soup.select_one("span.amount.xxl")
+        
+        if balance_element:
+            balance_text = balance_element.text.strip()
+            clean_balance = int(float(balance_text.replace(',', '')))
+            return clean_balance
+            
+        return "حساب غير صحيح أو فشل الدخول"
+    except Exception as e:
+        print(f"Fetch Error: {e}")
+        return "خطأ في الاتصال بالخادم"
+
 def get_towers_balance():
-    u, p = get_credentials("towers")
+    u, p = get_decrypted_credential("towers")
     if not u or not p:
         return "غير مُعرّف"
-    # يمكنك وضع كود الجلب الفعلي هنا، سنضع قيمة تجريبية كمثال أو نعيد الرقم
-    return 2765000
+    return fetch_balance_clean("https://admin.earthlink.iq/Home.aspx", u, p)
 
 def get_ftth_balance():
-    u, p = get_credentials("ftth")
+    u, p = get_decrypted_credential("ftth")
     if not u or not p:
         return "غير مُعرّف"
-    return 1450000
+    return fetch_balance_clean("https://admin.ftth.iq", u, p)
 
-# --- صفحة لوحة التحكم التفاعلية (HTML الداخليه) ---
-ADMIN_TEMPLATE = """
+# --- قوالب صفحات الويب الإدارية (Dashboard & Login) ---
+DASHBOARD_HTML = """
 <!DOCTYPE html>
 <html lang="ar" dir="rtl">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>لوحة تحكم بوت المراقبة</title>
+    <title>لوحة تحكم الأرصدة والشبكات</title>
     <style>
-        body { font-family: Tahoma, sans-serif; background-color: #f4f7f6; margin: 0; padding: 20px; color: #333; }
-        .container { max-width: 800px; margin: auto; background: white; padding: 20px; border-radius: 10px; box-shadow: 0 4px 10px rgba(0,0,0,0.1); }
-        h2 { color: #007bff; text-align: center; }
-        .card { background: #e9ecef; padding: 15px; margin: 15px 0; border-radius: 8px; }
+        body { font-family: 'Segoe UI', Tahoma, sans-serif; background: #f0f2f5; margin: 0; padding: 20px; color: #333; }
+        .wrapper { max-width: 900px; margin: auto; background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.08); }
+        h2 { color: #0066cc; text-align: center; margin-bottom: 25px; }
+        .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 25px; }
+        .card { background: #f8f9fa; padding: 20px; border-radius: 8px; border-right: 5px solid #0066cc; }
+        .card h3 { margin-top: 0; color: #444; }
+        .amount { font-size: 22px; font-weight: bold; color: #28a745; margin-top: 10px; }
+        .form-section { background: #fff; padding: 20px; border: 1px solid #e0e0e0; border-radius: 8px; margin-bottom: 20px; }
         .form-group { margin-bottom: 15px; }
-        label { display: block; margin-bottom: 5px; font-weight: bold; }
-        input[type="text"], input[type="password"], input[type="number"] { width: 100%; padding: 10px; box-sizing: border-box; border: 1px solid #ccc; border-radius: 5px; }
-        button { background: #007bff; color: white; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer; font-size: 16px; }
-        button:hover { background: #0056b3; }
-        .logout { float: left; background: #dc3545; }
+        label { display: block; margin-bottom: 6px; font-weight: 600; }
+        input[type="text"], input[type="password"], input[type="number"] { width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 6px; box-sizing: border-box; }
+        button { background: #0066cc; color: white; border: none; padding: 12px 25px; border-radius: 6px; cursor: pointer; font-size: 16px; font-weight: bold; width: 100%; }
+        button:hover { background: #004d99; }
+        .logout { background: #dc3545; width: auto; padding: 8px 15px; float: left; font-size: 14px; text-decoration: none; color: white; border-radius: 6px; }
         .logout:hover { background: #c82333; }
-        .alert { padding: 10px; background: #d4edda; color: #155724; border-radius: 5px; margin-bottom: 15px; text-align: center; }
+        .alert { padding: 12px; background: #d4edda; color: #155724; border-radius: 6px; margin-bottom: 20px; text-align: center; font-weight: bold; }
     </style>
 </head>
 <body>
-    <div class="container">
-        <a href="/logout"><button class="logout">تسجيل الخروج</button></a>
-        <h2>📊 لوحة تحكم شبكات إيرثلنك و FTTH</h2>
+    <div class="wrapper">
+        <a href="/logout" class="logout">تسجيل الخروج</a>
+        <h2>🛡️ لوحة إدارة ومراقبة أرصدة الشبكات</h2>
         
         {% if msg %}
             <div class="alert">{{ msg }}</div>
         {% endif %}
 
-        <div class="card">
-            <h3>📈 حالة الأرصدة الحالية</h3>
-            <p><strong>رصيد الأبراج:</strong> {{ t_bal }} دينار</p>
-            <p><strong>رصيد FTTH:</strong> {{ f_bal }} دينار</p>
-            <p><strong>حد التحذير والتنبيه:</strong> {{ threshold }} دينار</p>
+        <div class="grid">
+            <div class="card">
+                <h3>📡 رصيد الأبراج (Earthlink)</h3>
+                <div class="amount">{{ t_disp }}</div>
+            </div>
+            <div class="card" style="border-right-color: #28a745;">
+                <h3>🌐 رصيد FTTH</h3>
+                <div class="amount">{{ f_disp }}</div>
+            </div>
         </div>
 
-        <div class="card">
-            <h3>⚙️ تحديث إعدادات النظام والأرصدة</h3>
+        <div class="form-section">
+            <h3>⚙️ إعدادات الحسابات وحد التنبيه (تخزين مشفر آمن)</h3>
             <form method="POST">
                 <div class="form-group">
                     <label>حد التنبيه ونفاذ الرصيد (دينار):</label>
                     <input type="number" name="threshold" value="{{ threshold }}">
                 </div>
-                
-                <hr style="margin: 20px 0;">
-                
-                <h4>🔑 بيانات نظام الأبراج (Earthlink)</h4>
+
+                <hr style="margin: 20px 0; border:0; border-top:1px solid #eee;">
+
                 <div class="form-group">
-                    <label>اسم المستخدم (User):</label>
-                    <input type="text" name="towers_user" placeholder="أدخل يوزر الأبراج">
+                    <label>يوزر الأبراج (Earthlink User):</label>
+                    <input type="text" name="towers_user" placeholder="أدخل اسم المستخدم للأبراج">
                 </div>
                 <div class="form-group">
-                    <label>كلمة المرور (Password):</label>
+                    <label>كلمة مرور الأبراج (Earthlink Password):</label>
                     <input type="password" name="towers_pass" placeholder="أدخل كلمة المرور">
                 </div>
 
-                <hr style="margin: 20px 0;">
+                <hr style="margin: 20px 0; border:0; border-top:1px solid #eee;">
 
-                <h4>🔑 بيانات نظام FTTH</h4>
                 <div class="form-group">
-                    <label>اسم المستخدم (User):</label>
-                    <input type="text" name="ftth_user" placeholder="أدخل يوزر FTTH">
+                    <label>يوزر FTTH:</label>
+                    <input type="text" name="ftth_user" placeholder="أدخل اسم المستخدم لـ FTTH">
                 </div>
                 <div class="form-group">
-                    <label>كلمة المرور (Password):</label>
+                    <label>كلمة مرور FTTH:</label>
                     <input type="password" name="ftth_pass" placeholder="أدخل كلمة المرور">
                 </div>
 
-                <button type="submit">حفظ التغييرات وتشفير البيانات</button>
+                <button type="submit">حفظ وتشفير البيانات وتحديث النظام</button>
             </form>
         </div>
     </div>
@@ -168,26 +212,26 @@ ADMIN_TEMPLATE = """
 </html>
 """
 
-LOGIN_TEMPLATE = """
+LOGIN_HTML = """
 <!DOCTYPE html>
 <html lang="ar" dir="rtl">
 <head>
     <meta charset="UTF-8">
-    <title>تسجيل الدخول لوحة التحكم</title>
+    <title>تسجيل الدخول للوحة التحكم</title>
     <style>
-        body { font-family: Tahoma, sans-serif; background: #f4f7f6; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
-        .login-box { background: white; padding: 30px; border-radius: 10px; box-shadow: 0 4px 10px rgba(0,0,0,0.1); width: 300px; text-align: center; }
-        input { width: 100%; padding: 10px; margin: 10px 0; border: 1px solid #ccc; border-radius: 5px; box-sizing: border-box; }
-        button { background: #007bff; color: white; border: none; padding: 10px; width: 100%; border-radius: 5px; cursor: pointer; }
-        .error { color: red; font-size: 14px; }
+        body { font-family: Tahoma, sans-serif; background: #f0f2f5; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
+        .box { background: white; padding: 30px; border-radius: 10px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); width: 320px; text-align: center; }
+        input { width: 100%; padding: 12px; margin: 12px 0; border: 1px solid #ccc; border-radius: 6px; box-sizing: border-box; }
+        button { background: #0066cc; color: white; border: none; padding: 12px; width: 100%; border-radius: 6px; font-weight: bold; cursor: pointer; }
+        .error { color: #dc3545; font-size: 14px; }
     </style>
 </head>
 <body>
-    <div class="login-box">
+    <div class="box">
         <h3>تسجيل الدخول للإدارة</h3>
         {% if error %}<p class="error">{{ error }}</p>{% endif %}
         <form method="POST">
-            <input type="password" name="password" placeholder="أدخل كلمة المرور" required>
+            <input type="password" name="password" placeholder="أدخل كلمة مرور الإدارة" required>
             <button type="submit">دخول</button>
         </form>
     </div>
@@ -195,55 +239,58 @@ LOGIN_TEMPLATE = """
 </html>
 """
 
-# --- مسارات الويب (Web Routes) ---
+# --- مسارات لوحة التحكم (Web Routes) ---
 @app.route("/", methods=["GET", "POST"])
-def admin_dashboard():
-    if not session.get("logged_in"):
+def index():
+    if not session.get("auth"):
         return redirect(url_for("login"))
     
     msg = None
     if request.method == "POST":
         threshold = request.form.get("threshold")
         if threshold:
-            set_setting("threshold_limit", threshold)
+            set_db_value("threshold_limit", threshold)
             
         t_u = request.form.get("towers_user")
         t_p = request.form.get("towers_pass")
         if t_u and t_p:
-            set_setting("towers_user", cipher.encrypt(t_u.encode()).decode())
-            set_setting("towers_pass", cipher.encrypt(t_p.encode()).decode())
+            set_db_value("towers_user", cipher.encrypt(t_u.encode()).decode())
+            set_db_value("towers_pass", cipher.encrypt(t_p.encode()).decode())
             
         f_u = request.form.get("ftth_user")
         f_p = request.form.get("ftth_pass")
         if f_u and f_p:
-            set_setting("ftth_user", cipher.encrypt(f_u.encode()).decode())
-            set_setting("ftth_pass", cipher.encrypt(f_p.encode()).decode())
+            set_db_value("ftth_user", cipher.encrypt(f_u.encode()).decode())
+            set_db_value("ftth_pass", cipher.encrypt(f_p.encode()).decode())
             
-        msg = "✅ تم حفظ وتحديث الإعدادات بنجاح!"
+        msg = "✅ تم الحفظ والتشفير وتحديث الإعدادات بنجاح!"
 
     t_bal = get_towers_balance()
     f_bal = get_ftth_balance()
-    threshold = get_setting("threshold_limit") or "300000"
+    threshold = get_db_value("threshold_limit") or "300000"
+    
+    t_disp = f"{t_bal:,.0f} دينار" if isinstance(t_bal, int) else t_bal
+    f_disp = f"{f_bal:,.0f} دينار" if isinstance(f_bal, int) else f_bal
 
-    return render_template_string(ADMIN_TEMPLATE, t_bal=t_bal, f_bal=f_bal, threshold=threshold, msg=msg)
+    return render_template_string(DASHBOARD_HTML, t_disp=t_disp, f_disp=f_disp, threshold=threshold, msg=msg)
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
     error = None
     if request.method == "POST":
-        if request.form.get("password") == WEB_ADMIN_PASSWORD:
-            session["logged_in"] = True
-            return redirect(url_for("admin_dashboard"))
+        if request.form.get("password") == ADMIN_PASSWORD:
+            session["auth"] = True
+            return redirect(url_for("index"))
         else:
             error = "كلمة المرور غير صحيحة!"
-    return render_template_string(LOGIN_TEMPLATE, error=error)
+    return render_template_string(LOGIN_HTML, error=error)
 
 @app.route("/logout")
 def logout():
-    session.pop("logged_in", None)
+    session.pop("auth", None)
     return redirect(url_for("login"))
 
-# --- مستقبل رسائل فيسبوك (Messenger Webhook) ---
+# --- مستقبل رسائل فيسبوك ماسنجر (Webhook) ---
 @app.route("/webhook", methods=["GET"])
 def verify_webhook():
     mode = request.args.get("hub.mode")
@@ -265,14 +312,18 @@ def handle_messages():
                 if not message_text:
                     continue
                 
+                # الرد على كلمة رصيد فوراً
                 if message_text.lower() in ["رصيد", "الرصيد", "balance"]:
                     t_bal = get_towers_balance()
                     f_bal = get_ftth_balance()
-                    limit_val = get_setting("threshold_limit")
+                    limit_val = get_db_value("threshold_limit") or "300000"
+                    
+                    t_str = f"{t_bal:,.0f} دينار" if isinstance(t_bal, int) else t_bal
+                    f_str = f"{f_bal:,.0f} دينار" if isinstance(f_bal, int) else f_bal
                     
                     reply = f"📊 **الرصيد الحالي للأنظمة:**\n"
-                    reply += f"- الأبراج: {t_bal:,.0f} دينار\n" if isinstance(t_bal, (int, float)) else f"- الأبراج: {t_bal}\n"
-                    reply += f"- FTTH: {f_bal:,.0f} دينار\n" if isinstance(f_bal, (int, float)) else f"- FTTH: {f_bal}\n"
+                    reply += f"- الأبراج: {t_str}\n"
+                    reply += f"- FTTH: {f_str}\n"
                     reply += f"⚙️ حد التحذير: {int(limit_val):,.0f} دينار"
                     
                     send_fb_message(sender_id, reply)
