@@ -63,55 +63,21 @@ def send_fb_message(recipient_id, text):
     }
     requests.post(url, json=payload)
 
-# --- جلب رصيد FTTH عبر الـ API الرسمي مع رؤوس الطلبات الكاملة ---
+# --- جلب رصيد FTTH مباشرة من الـ API الخاص بك ---
 def get_ftth_balance():
-    u, p = get_decrypted_credential("ftth")
-    if not u or not p:
-        return "غير مُعرّف"
     try:
-        token_url = "https://admin.ftth.iq/api/auth/Contractor/token"
-        payload = {
-            "grant_type": "password",
-            "client_id": "earthlink-portals",
-            "username": u,
-            "password": p
-        }
-        headers = {
-            "Content-Type": "application/x-www-form-urlencoded",
-            "Accept": "application/json",
-            "Origin": "https://admin.ftth.iq",
-            "Referer": "https://admin.ftth.iq/"
-        }
+        api_url = "https://war.ct.ws/api_balance.php?api_key=my_super_secret_key_1995"
+        response = requests.get(api_url, timeout=15)
         
-        # 1. طلب الـ Token
-        response = requests.post(token_url, data=payload, headers=headers, timeout=15)
-        if response.status_code != 200:
-            return "خطأ في بيانات الدخول"
-            
-        token_data = response.json()
-        access_token = token_data.get("access_token")
-        
-        if not access_token:
-            return "فشل في الحصول على المصادقة"
-            
-        # 2. جلب بيانات الحساب والرصيد باستخدام الـ Token
-        balance_headers = {
-            "Authorization": f"Bearer {access_token}",
-            "Accept": "application/json",
-            "Origin": "https://admin.ftth.iq",
-            "Referer": "https://admin.ftth.iq/"
-        }
-        
-        profile_response = requests.get("https://admin.ftth.iq/api/contractor/profile", headers=balance_headers, timeout=15)
-        
-        if profile_response.status_code == 200:
-            data = profile_response.json()
-            balance = data.get("balance", data.get("AccountBalance", data.get("amount", 0)))
+        if response.status_code == 200:
+            data = response.json()
+            # استخراج الرصيد بناءً على شكل الرد القادم من الـ API الخاص بك
+            balance = data.get("balance", data.get("amount", data.get("result", 0)))
             return int(float(balance))
             
-        return "تعذر جلب الرصيد"
+        return "خطأ في الاستجابة من الـ API"
     except Exception as e:
-        print(f"FTTH API Error: {e}")
+        print(f"API Error: {e}")
         return "خطأ في الاتصال بالخادم"
 
 # --- دالة رصيد الأبراج ---
@@ -119,18 +85,7 @@ def get_towers_balance():
     u, p = get_decrypted_credential("towers")
     if not u or not p:
         return "غير مُعرّف"
-    try:
-        session = requests.Session()
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
-        }
-        resp = session.get("https://admin.earthlink.iq/Home.aspx", headers=headers, timeout=15)
-        if resp.status_code == 200:
-            return "قيد التحديث (API الأبراج)"
-        return "خطأ في الاتصال"
-    except Exception as e:
-        return "خطأ في الاتصال"
+    return "قيد التحديث"
 
 # --- واجهات الويب (Dashboard & Login) ---
 DASHBOARD_HTML = """
@@ -180,7 +135,7 @@ DASHBOARD_HTML = """
         </div>
 
         <div class="form-section">
-            <h3>⚙️ إعدادات الحسابات وحد التنبيه (تخزين مشفر آمن)</h3>
+            <h3>⚙️ إعدادات الحسابات وحد التنبيه</h3>
             <form method="POST">
                 <div class="form-group">
                     <label>حد التنبيه ونفاذ الرصيد (دينار):</label>
@@ -198,18 +153,7 @@ DASHBOARD_HTML = """
                     <input type="password" name="towers_pass" placeholder="أدخل كلمة المرور">
                 </div>
 
-                <hr style="margin: 20px 0; border:0; border-top:1px solid #eee;">
-
-                <div class="form-group">
-                    <label>يوزر FTTH:</label>
-                    <input type="text" name="ftth_user" placeholder="أدخل اسم المستخدم لـ FTTH">
-                </div>
-                <div class="form-group">
-                    <label>كلمة مرور FTTH:</label>
-                    <input type="password" name="ftth_pass" placeholder="أدخل كلمة المرور">
-                </div>
-
-                <button type="submit">حفظ وتشفير البيانات وتحديث النظام</button>
+                <button type="submit">حفظ وتحديث الإعدادات</button>
             </form>
         </div>
     </div>
@@ -261,13 +205,7 @@ def index():
             set_db_value("towers_user", cipher.encrypt(t_u.encode()).decode())
             set_db_value("towers_pass", cipher.encrypt(t_p.encode()).decode())
             
-        f_u = request.form.get("ftth_user")
-        f_p = request.form.get("ftth_pass")
-        if f_u and f_p:
-            set_db_value("ftth_user", cipher.encrypt(f_u.encode()).decode())
-            set_db_value("ftth_pass", cipher.encrypt(f_p.encode()).decode())
-            
-        msg = "✅ تم الحفظ والتشفير وتحديث الإعدادات بنجاح!"
+        msg = "✅ تم حفظ التحديثات والإعدادات بنجاح!"
 
     t_bal = get_towers_balance()
     f_bal = get_ftth_balance()
