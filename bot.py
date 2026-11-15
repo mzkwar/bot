@@ -1,5 +1,6 @@
 import os
 import sqlite3
+import re
 import requests
 from flask import Flask, render_template_string, request, redirect, url_for, session, jsonify
 from cryptography.fernet import Fernet
@@ -15,6 +16,7 @@ cipher = Fernet(ENCRYPTION_KEY)
 PAGE_ACCESS_TOKEN = os.getenv("PAGE_ACCESS_TOKEN")
 VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "my_secure_verify_token")
 
+# --- إعداد قاعدة البيانات المحلية ---
 def init_db():
     conn = sqlite3.connect("system_database.db", check_same_thread=False)
     cursor = conn.cursor()
@@ -63,7 +65,7 @@ def send_fb_message(recipient_id, text):
     }
     requests.post(url, json=payload)
 
-# --- دالة جلب الأرصدة عبر Playwright (تتفاعل مباشرة مع حقول Angular) ---
+# --- دالة جلب الأرصدة عبر Playwright باستخدام المحددات المستقرة ---
 def fetch_balance_playwright(url, username, password):
     try:
         with sync_playwright() as p:
@@ -71,13 +73,24 @@ def fetch_balance_playwright(url, username, password):
             page = browser.new_page()
             page.goto(url, timeout=30000)
             
-            # تعبئة بيانات الدخول بناءً على المعرفات الحقيقية لواجهات Angular
-            page.fill("input#mat-input-0", username)
-            page.fill("input#mat-input-1", password)
-            page.click("button.mat-raised-button")
+            # الانتظار حتى تحميل عناصر الحقول
+            page.wait_for_selector("input", timeout=15000)
             
-            # الانتظار حتى ظهور عنصر الرصيد
-            page.wait_for_selector("span.amount.xxl", timeout=20000)
+            # تعبئة الحقول بالمحددات المستقرة
+            page.locator("input[type='text'], input[type='email']").first.fill(username)
+            page.locator("input[type='password']").first.fill(password)
+            
+            # النقر على زر الدخول بمرونة تامة
+            try:
+                page.click("button[type='submit']", timeout=5000)
+            except:
+                try:
+                    page.click("button.mat-raised-button", timeout=5000)
+                except:
+                    page.locator("button").filter(has_text=re.compile(r"دخول|تسجيل|Login|Log in", re.I)).click()
+            
+            # الانتظار حتى ظهور عنصر الرصيد المالي
+            page.wait_for_selector("span.amount.xxl", timeout=25000)
             balance_text = page.locator("span.amount.xxl").inner_text().strip()
             browser.close()
             
@@ -99,7 +112,7 @@ def get_ftth_balance():
         return "غير مُعرّف"
     return fetch_balance_playwright("https://admin.ftth.iq", u, p)
 
-# --- واجهات الويب ---
+# --- واجهات الويب (Dashboard & Login) ---
 DASHBOARD_HTML = """
 <!DOCTYPE html>
 <html lang="ar" dir="rtl">
