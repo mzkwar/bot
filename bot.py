@@ -4,10 +4,8 @@ import threading
 import time
 import urllib.request
 import requests
+from bs4 import BeautifulSoup
 from flask import Flask, request, jsonify
-from selenium import webdriver
-from selenium.webdriver.common.by import By
-from selenium.webdriver.chrome.options import Options
 from cryptography.fernet import Fernet
 
 app = Flask(__name__)
@@ -29,7 +27,6 @@ def init_db():
     cursor.execute('''CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, name TEXT)''')
     cursor.execute('''CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)''')
     
-    # حد التحذير الافتراضي للأنظمة (300 ألف)
     cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('threshold_limit', '300000')")
     
     conn.commit()
@@ -69,7 +66,7 @@ def send_fb_message(recipient_id, text):
     }
     requests.post(url, json=payload)
 
-# --- فك تشفير بيانات الاعتماد لأي نظام ---
+# --- فك تشفير بيانات الاعتماد ---
 def get_credentials(system_prefix):
     encrypted_user = get_setting(f"{system_prefix}_user")
     encrypted_pass = get_setting(f"{system_prefix}_pass")
@@ -81,69 +78,87 @@ def get_credentials(system_prefix):
     password = cipher.decrypt(encrypted_pass.encode()).decode()
     return username, password
 
-# --- 1. دالة جلب رصيد الأبراج ---
+# --- 1. دالة جلب رصيد الأبراج بالطريقة السريعة والمستقرة (Requests) ---
 def get_towers_balance():
     username, password = get_credentials("towers")
     if not username or not password:
         return "not_configured"
 
-    options = Options()
-    options.add_argument("--headless")
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage")
-    options.add_argument("--disable-gpu")
-    options.binary_location = "/usr/bin/chromium"
-    
     try:
-        driver = webdriver.Chrome(options=options)
+        session = requests.Session()
+        login_url = "https://admin.earthlink.iq/Home.aspx"
         
-        driver.get("https://admin.earthlink.iq/Home.aspx")
-        time.sleep(2)
+        # جلب الصفحة أولاً لاستخراج رموز الأمان ASP.NET (__VIEWSTATE وغيرها)
+        res = session.get(login_url, timeout=15)
+        soup = BeautifulSoup(res.text, 'html.parser')
         
-        driver.find_element(By.ID, "Login1_UserName").send_keys(username)
-        driver.find_element(By.ID, "Login1_Password").send_keys(password)
-        driver.find_element(By.ID, "Login1_LoginButton").click()
+        viewstate = soup.find('input', {'name': '__VIEWSTATE'})
+        viewstate_gen = soup.find('input', {'name': '__VIEWSTATEGENERATOR'})
+        eventvalidation = soup.find('input', {'name': '__EVENTVALIDATION'})
         
-        time.sleep(5)
+        payload = {
+            "__VIEWSTATE": viewstate['value'] if viewstate else "",
+            "__VIEWSTATEGENERATOR": viewstate_gen['value'] if viewstate_gen else "",
+            "__EVENTVALIDATION": eventvalidation['value'] if eventvalidation else "",
+            "Login1$UserName": username,
+            "Login1$Password": password,
+            "Login1$LoginButton": "Log In"
+        }
         
-        balance_element = driver.find_element(By.ID, "ctl00_ctl00_HeaderTopNavControl_balanacelabel")
-        balance_text = balance_element.text.strip()
-        driver.quit()
-        return int(''.join(filter(str.isdigit, balance_text)))
+        # إرسال طلب تسجيل الدخول
+        response = session.post(login_url, data=payload, timeout=15)
+        
+        # التحقق مما إذا تم نجاح الدخول والوصول للوحة التحكم
+        if "balanacelabel" in response.text or "Home" in response.url:
+            soup_dashboard = BeautifulSoup(response.text, 'html.parser')
+            balance_element = soup_dashboard.find(id="ctl00_ctl00_HeaderTopNavControl_balanacelabel")
+            if balance_element:
+                balance_text = balance_element.text.strip()
+                return int(''.join(filter(str.isdigit, balance_text)))
+        
+        return "invalid_credentials"
     except Exception as e:
-        print(f"Error fetching towers balance: {e}")
+        print(f"Error fetching towers balance via requests: {e}")
         return "invalid_credentials"
 
-# --- 2. دالة جلب رصيد الـ FTTH ---
+# --- 2. دالة جلب رصيد الـ FTTH بالطريقة السريعة والمستقرة (Requests) ---
 def get_ftth_balance():
     username, password = get_credentials("ftth")
     if not username or not password:
         return "not_configured"
 
-    options = Options()
-    options.add_argument("--headless")
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage")
-    options.add_argument("--disable-gpu")
-    options.binary_location = "/usr/bin/chromium"
-    
     try:
-        driver = webdriver.Chrome(options=options)
+        session = requests.Session()
+        login_url = "https://admin.ftth.iq"
         
-        driver.get("https://admin.ftth.iq")
-        time.sleep(2)
+        res = session.get(login_url, timeout=15)
+        soup = BeautifulSoup(res.text, 'html.parser')
         
-        driver.find_element(By.ID, "Login1_UserName").send_keys(username)
-        driver.find_element(By.ID, "Login1_Password").send_keys(password)
-        driver.find_element(By.ID, "Login1_LoginButton").click()
+        viewstate = soup.find('input', {'name': '__VIEWSTATE'})
+        viewstate_gen = soup.find('input', {'name': '__VIEWSTATEGENERATOR'})
+        eventvalidation = soup.find('input', {'name': '__EVENTVALIDATION'})
         
-        time.sleep(5)
+        payload = {
+            "__VIEWSTATE": viewstate['value'] if viewstate else "",
+            "__VIEWSTATEGENERATOR": viewstate_gen['value'] if viewstate_gen else "",
+            "__EVENTVALIDATION": eventvalidation['value'] if eventvalidation else "",
+            "Login1$UserName": username,
+            "Login1$Password": password,
+            "Login1$LoginButton": "Log In"
+        }
         
-        balance_element = driver.find_element(By.ID, "ctl00_ctl00_HeaderTopNavControl_balanacelabel")
-        driver.quit()
-        return int(''.join(filter(str.isdigit, balance_element.text.strip())))
+        response = session.post(login_url, data=payload, timeout=15)
+        
+        if "balanacelabel" in response.text or "Home" in response.url:
+            soup_dashboard = BeautifulSoup(response.text, 'html.parser')
+            balance_element = soup_dashboard.find(id="ctl00_ctl00_HeaderTopNavControl_balanacelabel")
+            if balance_element:
+                balance_text = balance_element.text.strip()
+                return int(''.join(filter(str.isdigit, balance_text)))
+                
+        return "invalid_credentials"
     except Exception as e:
-        print(f"Error fetching FTTH balance: {e}")
+        print(f"Error fetching FTTH balance via requests: {e}")
         return "invalid_credentials"
 
 # --- المراقب الدوري المزدوج في الخلفية ---
@@ -153,13 +168,11 @@ def background_monitor():
             limit_val = get_setting("threshold_limit")
             current_threshold = int(limit_val) if limit_val else 300000
             
-            # فحص الأبراج
             t_balance = get_towers_balance()
             if isinstance(t_balance, int) and t_balance <= current_threshold:
                 alert_msg = f"⚠️ تنبيه نفاذ رصيد [الأبراج]!\nرصيدك الحالي: {t_balance:,.0f} دينار فقط.\nيرجى إعادة التعبئة."
                 broadcast_alert(alert_msg)
 
-            # فحص FTTH
             f_balance = get_ftth_balance()
             if isinstance(f_balance, int) and f_balance <= current_threshold:
                 alert_msg = f"⚠️ تنبيه نفاذ رصيد [FTTH]!\nرصيدك الحالي: {f_balance:,.0f} دينار فقط.\nيرجى إعادة التعبئة."
@@ -168,7 +181,7 @@ def background_monitor():
         except Exception as e:
             print(f"Error in background monitor: {e}")
             
-        time.sleep(21600) # فحص كل 6 ساعات
+        time.sleep(21600)
 
 def broadcast_alert(msg):
     users = db_execute("SELECT id FROM users", fetch=True)
@@ -180,7 +193,6 @@ def broadcast_alert(msg):
 
 threading.Thread(target=background_monitor, daemon=True).start()
 
-# --- خيط الإيقاظ الذاتي (Self-Ping) لمنع السكون على Render ---
 def self_ping():
     while True:
         time.sleep(300)
@@ -188,7 +200,6 @@ def self_ping():
         if app_url:
             try:
                 urllib.request.urlopen(app_url)
-                print("Self-ping sent successfully!")
             except Exception as e:
                 print(f"Self-ping error: {e}")
 
@@ -220,12 +231,10 @@ def handle_messages():
                 
                 is_private_chat = "message" in messaging and "is_echo" not in messaging and sender_id != recipient_id
                 
-                # أمر معرف الـ ID
                 if message_text.lower() == "id":
                     send_fb_message(sender_id, f"معرفك الشخصي هو: {sender_id}")
                     continue
 
-                # فحص إذا كان المدير في وضع إدخال بيانات معلقة
                 current_state = get_setting(f"state_{sender_id}")
                 
                 if sender_id == ADMIN_FB_ID and is_private_chat and current_state:
@@ -247,7 +256,7 @@ def handle_messages():
                         send_fb_message(sender_id, "❌ يرجى إرسال اليوزر وكلمة المرور في سطرين منفصلين.")
                         continue
 
-                # 1. الاستجابة لكلمة "رصيد"
+                # الاستجابة لكلمة "رصيد"
                 if message_text.lower() in ["رصيد", "الرصيد", "balance"]:
                     t_bal = get_towers_balance()
                     f_bal = get_ftth_balance()
@@ -256,7 +265,6 @@ def handle_messages():
                     
                     reply = "📊 **الرصيد الحالي للأنظمة:**\n"
                     
-                    # فحص الأبراج
                     if t_bal == "not_configured":
                         reply += "- الأبراج: ⚠️ غير مُعرّف\n"
                     elif t_bal == "invalid_credentials":
@@ -264,7 +272,6 @@ def handle_messages():
                     else:
                         reply += f"- الأبراج: {t_bal:,.0f} دينار\n"
                         
-                    # فحص FTTH
                     if f_bal == "not_configured":
                         reply += "- FTTH: ⚠️ غير مُعرّف\n"
                     elif f_bal == "invalid_credentials":
@@ -276,7 +283,6 @@ def handle_messages():
                     
                     send_fb_message(sender_id, reply)
                 
-                # 2. أوامر الإدارة وتفعيل الحالات الخاصة
                 elif sender_id == ADMIN_FB_ID and is_private_chat:
                     if message_text.lower() == "تعيين الأبراج":
                         set_setting(f"state_{sender_id}", "waiting_towers")
