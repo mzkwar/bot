@@ -1,11 +1,11 @@
 import os
 import sqlite3
 import time
-import requests
+import cloudscraper
 import urllib3
 from flask import Flask, render_template_string, request, jsonify
 
-# إيقاف تحذيرات الشهادات الأمنية لضمان عدم توقف الاتصال
+# إيقاف تحذيرات الشهادات الأمنية
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 app = Flask(__name__)
@@ -50,32 +50,38 @@ def send_fb_message(recipient_id, text):
         "message": {"text": text},
         "access_token": PAGE_ACCESS_TOKEN
     }
+    # استخدام cloudscraper حتى لإرسال رسائل فيسبوك إن أردت أو requests العادي
+    import requests
     response = requests.post(url, json=payload)
     add_log(f"FB Send Response: {response.status_code}, {response.text}")
 
-# --- جلب رصيد FTTH مع محلل JSON الآمن وقراءة النص الخام ---
+# --- جلب رصيد FTTH باستخدام Cloudscraper لتجاوز حماية aes.js ---
 def get_ftth_balance():
     api_url = "https://war.ct.ws/api_balance.php?api_key=my_super_secret_key_1995"
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        "Accept": "application/json, text/plain, */*"
-    }
     retries = 3
+    
+    # إنشاء مشغل سكرابر لتجاوز الحماية
+    scraper = cloudscraper.create_scraper(
+        browser={
+            'browser': 'chrome',
+            'platform': 'windows',
+            'desktop': True
+        }
+    )
+    
     for attempt in range(retries):
         try:
-            session = requests.Session()
-            response = session.get(api_url, headers=headers, timeout=15, verify=False)
-            
-            add_log(f"API Attempt {attempt + 1} Raw Text: {response.text[:100]}")
+            response = scraper.get(api_url, timeout=15)
+            add_log(f"Cloudscraper Attempt {attempt + 1} Status: {response.status_code}")
+            add_log(f"Cloudscraper Raw Text: {response.text[:100]}")
             
             if response.status_code == 200 and response.text.strip():
-                # محاولة قراءة الـ JSON بأمان
                 data = response.json()
                 balance = data.get("model", {}).get("balance", 0)
                 return int(float(balance))
         except Exception as e:
-            add_log(f"API Attempt {attempt + 1} failed: {e}")
-            time.sleep(1)
+            add_log(f"Cloudscraper Attempt {attempt + 1} failed: {e}")
+            time.sleep(2)
             
     return "خطأ في الاتصال بالخادم"
 
