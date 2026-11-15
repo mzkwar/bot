@@ -8,6 +8,8 @@ from flask import Flask, request, jsonify
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.service import Service
+from webdriver_manager.chrome import ChromeDriverManager
 from cryptography.fernet import Fernet
 
 app = Flask(__name__)
@@ -81,21 +83,23 @@ def get_credentials(system_prefix):
     password = cipher.decrypt(encrypted_pass.encode()).decode()
     return username, password
 
-# --- 1. دالة جلب رصيد الأبراج (إيرثلنك) ---
+# --- 1. دالة جلب رصيد الأبراج (مع فحص صحة الحساب) ---
 def get_towers_balance():
     username, password = get_credentials("towers")
     if not username or not password:
-        return None
+        return "not_configured"
 
     options = Options()
     options.add_argument("--headless")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--disable-gpu")
-    options.binary_location = "/usr/bin/chromium"  # مسار الكروم على Render
+    options.binary_location = "/usr/bin/chromium"
     
-    driver = webdriver.Chrome(options=options)
     try:
+        service = Service(ChromeDriverManager().install())
+        driver = webdriver.Chrome(service=service, options=options)
+        
         driver.get("https://admin.earthlink.iq/Home.aspx")
         time.sleep(2)
         
@@ -107,28 +111,29 @@ def get_towers_balance():
         
         balance_element = driver.find_element(By.ID, "ctl00_ctl00_HeaderTopNavControl_balanacelabel")
         balance_text = balance_element.text.strip()
+        driver.quit()
         return int(''.join(filter(str.isdigit, balance_text)))
     except Exception as e:
         print(f"Error fetching towers balance: {e}")
-        return None
-    finally:
-        driver.quit()
+        return "invalid_credentials"
 
-# --- 2. دالة جلب رصيد الـ FTTH ---
+# --- 2. دالة جلب رصيد الـ FTTH (مع فحص صحة الحساب) ---
 def get_ftth_balance():
     username, password = get_credentials("ftth")
     if not username or not password:
-        return None
+        return "not_configured"
 
     options = Options()
     options.add_argument("--headless")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--disable-gpu")
-    options.binary_location = "/usr/bin/chromium"  # مسار الكروم على Render
+    options.binary_location = "/usr/bin/chromium"
     
-    driver = webdriver.Chrome(options=options)
     try:
+        service = Service(ChromeDriverManager().install())
+        driver = webdriver.Chrome(service=service, options=options)
+        
         driver.get("https://admin.ftth.iq")
         time.sleep(2)
         
@@ -139,12 +144,11 @@ def get_ftth_balance():
         time.sleep(5)
         
         balance_element = driver.find_element(By.ID, "ctl00_ctl00_HeaderTopNavControl_balanacelabel")
+        driver.quit()
         return int(''.join(filter(str.isdigit, balance_element.text.strip())))
     except Exception as e:
         print(f"Error fetching FTTH balance: {e}")
-        return None
-    finally:
-        driver.quit()
+        return "invalid_credentials"
 
 # --- المراقب الدوري المزدوج في الخلفية ---
 def background_monitor():
@@ -155,13 +159,13 @@ def background_monitor():
             
             # فحص الأبراج
             t_balance = get_towers_balance()
-            if t_balance is not None and t_balance <= current_threshold:
+            if isinstance(t_balance, int) and t_balance <= current_threshold:
                 alert_msg = f"⚠️ تنبيه نفاذ رصيد [الأبراج]!\nرصيدك الحالي: {t_balance:,.0f} دينار فقط.\nيرجى إعادة التعبئة."
                 broadcast_alert(alert_msg)
 
             # فحص FTTH
             f_balance = get_ftth_balance()
-            if f_balance is not None and f_balance <= current_threshold:
+            if isinstance(f_balance, int) and f_balance <= current_threshold:
                 alert_msg = f"⚠️ تنبيه نفاذ رصيد [FTTH]!\nرصيدك الحالي: {f_balance:,.0f} دينار فقط.\nيرجى إعادة التعبئة."
                 broadcast_alert(alert_msg)
                     
@@ -255,8 +259,23 @@ def handle_messages():
                     current_threshold = int(limit_val) if limit_val else 300000
                     
                     reply = "📊 **الرصيد الحالي للأنظمة:**\n"
-                    reply += f"- الأبراج: {t_bal:,.0f} دينار\n" if t_bal is not None else "- الأبراج: ⚠️ غير مُعرّف\n"
-                    reply += f"- FTTH: {f_bal:,.0f} دينار\n" if f_bal is not None else "- FTTH: ⚠️ غير مُعرّف\n"
+                    
+                    # فحص الأبراج
+                    if t_bal == "not_configured":
+                        reply += "- الأبراج: ⚠️ غير مُعرّف\n"
+                    elif t_bal == "invalid_credentials":
+                        reply += "- الأبراج: ❌ حساب الأبراج غير صحيح، تأكد من المعلومات المدخلة\n"
+                    else:
+                        reply += f"- الأبراج: {t_bal:,.0f} دينار\n"
+                        
+                    # فحص FTTH
+                    if f_bal == "not_configured":
+                        reply += "- FTTH: ⚠️ غير مُعرّف\n"
+                    elif f_bal == "invalid_credentials":
+                        reply += "- FTTH: ❌ حساب FTTH غير صحيح، تأكد من المعلومات المدخلة\n"
+                    else:
+                        reply += f"- FTTH: {f_bal:,.0f} دينار\n"
+                        
                     reply += f"⚙️ حد التحذير: {current_threshold:,.0f} دينار"
                     
                     send_fb_message(sender_id, reply)
