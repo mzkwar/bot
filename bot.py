@@ -1,23 +1,20 @@
 import os
 import sqlite3
 import requests
-from bs4 import BeautifulSoup
 from flask import Flask, render_template_string, request, redirect, url_for, session, jsonify
 from cryptography.fernet import Fernet
+from playwright.sync_api import sync_playwright
 
 app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET_KEY", "mahdi_secure_secret_key_9988")
 
-# إعدادات الأمان وتشفير قواعد البيانات
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")
 ENCRYPTION_KEY = Fernet.generate_key()
 cipher = Fernet(ENCRYPTION_KEY)
 
-# إعدادات فيسبوك ماسنجر الأساسية
 PAGE_ACCESS_TOKEN = os.getenv("PAGE_ACCESS_TOKEN")
 VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "my_secure_verify_token")
 
-# --- إعداد قاعدة البيانات المحلية ---
 def init_db():
     conn = sqlite3.connect("system_database.db", check_same_thread=False)
     cursor = conn.cursor()
@@ -55,7 +52,6 @@ def get_decrypted_credential(prefix):
     except:
         return None, None
 
-# --- إرسال الرسائل عبر فيسبوك ماسنجر ---
 def send_fb_message(recipient_id, text):
     if not PAGE_ACCESS_TOKEN:
         return
@@ -67,67 +63,43 @@ def send_fb_message(recipient_id, text):
     }
     requests.post(url, json=payload)
 
-# --- دالة جلب الأرصدة النظيفة والسريعة (باستخدام Requests Session و BeautifulSoup) ---
-def fetch_balance_clean(url, username, password):
+# --- دالة جلب الأرصدة عبر Playwright (تتفاعل مباشرة مع حقول Angular) ---
+def fetch_balance_playwright(url, username, password):
     try:
-        session = requests.Session()
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-            "Accept-Language": "ar,en-US;q=0.7,en;q=0.3"
-        }
-        
-        # 1. فتح الصفحة الرئيسية لجلب رموز الحماية والجلسة
-        response = session.get(url, headers=headers, timeout=15)
-        soup = BeautifulSoup(response.text, 'html.parser')
-        
-        payload = {}
-        for input_tag in soup.find_all('input'):
-            name = input_tag.get('name')
-            value = input_tag.get('value', '')
-            if name:
-                payload[name] = value
-                
-        # حقن بيانات الاعتماد
-        payload.update({
-            "Login1$UserName": username,
-            "Login1$Password": password,
-            "Login1$LoginButton": "Log In"
-        })
-
-        # 2. إرسال طلب تسجيل الدخول POST
-        session.post(url, data=payload, headers=headers, timeout=15)
-        
-        # 3. زيارة صفحة اللوحة مجدداً بعد نجاح الدخول لجلب الرصيد
-        dash_response = session.get(url, headers=headers, timeout=15)
-        dash_soup = BeautifulSoup(dash_response.text, 'html.parser')
-        
-        # البحث عن عنصر الرصيد (span.amount.xxl)
-        balance_element = dash_soup.select_one("span.amount.xxl")
-        
-        if balance_element:
-            balance_text = balance_element.text.strip()
-            clean_balance = int(float(balance_text.replace(',', '')))
-            return clean_balance
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
+            page = browser.new_page()
+            page.goto(url, timeout=30000)
             
-        return "حساب غير صحيح أو فشل الدخول"
+            # تعبئة بيانات الدخول بناءً على المعرفات الحقيقية لواجهات Angular
+            page.fill("input#mat-input-0", username)
+            page.fill("input#mat-input-1", password)
+            page.click("button.mat-raised-button")
+            
+            # الانتظار حتى ظهور عنصر الرصيد
+            page.wait_for_selector("span.amount.xxl", timeout=20000)
+            balance_text = page.locator("span.amount.xxl").inner_text().strip()
+            browser.close()
+            
+            clean_val = int(float(balance_text.replace(',', '').split()[0]))
+            return clean_val
     except Exception as e:
-        print(f"Fetch Error: {e}")
-        return "خطأ في الاتصال بالخادم"
+        print(f"Playwright Error: {e}")
+        return "خطأ في تسجيل الدخول أو كلمة المرور"
 
 def get_towers_balance():
     u, p = get_decrypted_credential("towers")
     if not u or not p:
         return "غير مُعرّف"
-    return fetch_balance_clean("https://admin.earthlink.iq/Home.aspx", u, p)
+    return fetch_balance_playwright("https://admin.earthlink.iq/Home.aspx", u, p)
 
 def get_ftth_balance():
     u, p = get_decrypted_credential("ftth")
     if not u or not p:
         return "غير مُعرّف"
-    return fetch_balance_clean("https://admin.ftth.iq", u, p)
+    return fetch_balance_playwright("https://admin.ftth.iq", u, p)
 
-# --- قوالب صفحات الويب الإدارية (Dashboard & Login) ---
+# --- واجهات الويب ---
 DASHBOARD_HTML = """
 <!DOCTYPE html>
 <html lang="ar" dir="rtl">
@@ -142,7 +114,7 @@ DASHBOARD_HTML = """
         .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 25px; }
         .card { background: #f8f9fa; padding: 20px; border-radius: 8px; border-right: 5px solid #0066cc; }
         .card h3 { margin-top: 0; color: #444; }
-        .amount { font-size: 22px; font-weight: bold; color: #28a745; margin-top: 10px; }
+        .amount { font-size: 20px; font-weight: bold; color: #28a745; margin-top: 10px; word-break: break-word; }
         .form-section { background: #fff; padding: 20px; border: 1px solid #e0e0e0; border-radius: 8px; margin-bottom: 20px; }
         .form-group { margin-bottom: 15px; }
         label { display: block; margin-bottom: 6px; font-weight: 600; }
@@ -239,7 +211,6 @@ LOGIN_HTML = """
 </html>
 """
 
-# --- مسارات لوحة التحكم (Web Routes) ---
 @app.route("/", methods=["GET", "POST"])
 def index():
     if not session.get("auth"):
@@ -290,7 +261,6 @@ def logout():
     session.pop("auth", None)
     return redirect(url_for("login"))
 
-# --- مستقبل رسائل فيسبوك ماسنجر (Webhook) ---
 @app.route("/webhook", methods=["GET"])
 def verify_webhook():
     mode = request.args.get("hub.mode")
@@ -312,7 +282,6 @@ def handle_messages():
                 if not message_text:
                     continue
                 
-                # الرد على كلمة رصيد فوراً
                 if message_text.lower() in ["رصيد", "الرصيد", "balance"]:
                     t_bal = get_towers_balance()
                     f_bal = get_ftth_balance()
