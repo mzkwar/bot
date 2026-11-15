@@ -2,7 +2,11 @@ import os
 import sqlite3
 import time
 import requests
+import urllib3
 from flask import Flask, render_template_string, request, jsonify
+
+# إيقاف تحذيرات الشهادات الأمنية لضمان عدم توقف الاتصال
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 app = Flask(__name__)
 
@@ -49,20 +53,29 @@ def send_fb_message(recipient_id, text):
     response = requests.post(url, json=payload)
     add_log(f"FB Send Response: {response.status_code}, {response.text}")
 
-# --- جلب رصيد FTTH مع نظام إعادة المحاولة التلقائي (Retry) لتجنب انقطاع الاتصال ---
+# --- جلب رصيد FTTH مع محاكاة المتصفح ونظام إعادة المحاولة الذكي ---
 def get_ftth_balance():
     api_url = "https://war.ct.ws/api_balance.php?api_key=my_super_secret_key_1995"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "application/json, text/plain, */*",
+        "Connection": "keep-alive"
+    }
     retries = 3
     for attempt in range(retries):
         try:
-            response = requests.get(api_url, timeout=10)
+            session = requests.Session()
+            response = session.get(api_url, headers=headers, timeout=15, verify=False)
+            
+            add_log(f"API Attempt {attempt + 1} Status: {response.status_code}")
+            
             if response.status_code == 200:
                 data = response.json()
                 balance = data.get("model", {}).get("balance", 0)
                 return int(float(balance))
         except Exception as e:
             add_log(f"API Attempt {attempt + 1} failed: {e}")
-            time.sleep(1) # الانتظار ثانية واحدة قبل إعادة المحاولة
+            time.sleep(2)
             
     return "خطأ في الاتصال بالخادم"
 
