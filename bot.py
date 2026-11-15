@@ -53,13 +53,12 @@ def send_fb_message(recipient_id, text):
     response = requests.post(url, json=payload)
     add_log(f"FB Send Response: {response.status_code}, {response.text}")
 
-# --- جلب رصيد FTTH مع محاكاة المتصفح ونظام إعادة المحاولة الذكي ---
+# --- جلب رصيد FTTH مع محلل JSON الآمن وقراءة النص الخام ---
 def get_ftth_balance():
     api_url = "https://war.ct.ws/api_balance.php?api_key=my_super_secret_key_1995"
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept": "application/json, text/plain, */*",
-        "Connection": "keep-alive"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept": "application/json, text/plain, */*"
     }
     retries = 3
     for attempt in range(retries):
@@ -67,15 +66,16 @@ def get_ftth_balance():
             session = requests.Session()
             response = session.get(api_url, headers=headers, timeout=15, verify=False)
             
-            add_log(f"API Attempt {attempt + 1} Status: {response.status_code}")
+            add_log(f"API Attempt {attempt + 1} Raw Text: {response.text[:100]}")
             
-            if response.status_code == 200:
+            if response.status_code == 200 and response.text.strip():
+                # محاولة قراءة الـ JSON بأمان
                 data = response.json()
                 balance = data.get("model", {}).get("balance", 0)
                 return int(float(balance))
         except Exception as e:
             add_log(f"API Attempt {attempt + 1} failed: {e}")
-            time.sleep(2)
+            time.sleep(1)
             
     return "خطأ في الاتصال بالخادم"
 
