@@ -1,6 +1,4 @@
 Flask
-playwright
+requests
 cryptography
 gunicorn
-requests
-beautifulsoup4
