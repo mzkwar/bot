@@ -8,8 +8,6 @@ from flask import Flask, request, jsonify
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.chrome.service import Service
-from webdriver_manager.chrome import ChromeDriverManager
 from cryptography.fernet import Fernet
 
 app = Flask(__name__)
@@ -83,7 +81,7 @@ def get_credentials(system_prefix):
     password = cipher.decrypt(encrypted_pass.encode()).decode()
     return username, password
 
-# --- 1. دالة جلب رصيد الأبراج (مع فحص صحة الحساب) ---
+# --- 1. دالة جلب رصيد الأبراج ---
 def get_towers_balance():
     username, password = get_credentials("towers")
     if not username or not password:
@@ -97,8 +95,7 @@ def get_towers_balance():
     options.binary_location = "/usr/bin/chromium"
     
     try:
-        service = Service(ChromeDriverManager().install())
-        driver = webdriver.Chrome(service=service, options=options)
+        driver = webdriver.Chrome(options=options)
         
         driver.get("https://admin.earthlink.iq/Home.aspx")
         time.sleep(2)
@@ -117,7 +114,7 @@ def get_towers_balance():
         print(f"Error fetching towers balance: {e}")
         return "invalid_credentials"
 
-# --- 2. دالة جلب رصيد الـ FTTH (مع فحص صحة الحساب) ---
+# --- 2. دالة جلب رصيد الـ FTTH ---
 def get_ftth_balance():
     username, password = get_credentials("ftth")
     if not username or not password:
@@ -131,8 +128,7 @@ def get_ftth_balance():
     options.binary_location = "/usr/bin/chromium"
     
     try:
-        service = Service(ChromeDriverManager().install())
-        driver = webdriver.Chrome(service=service, options=options)
+        driver = webdriver.Chrome(options=options)
         
         driver.get("https://admin.ftth.iq")
         time.sleep(2)
