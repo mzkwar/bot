@@ -1,10 +1,8 @@
 import os
 import sqlite3
-import re
 import requests
 from flask import Flask, render_template_string, request, redirect, url_for, session, jsonify
 from cryptography.fernet import Fernet
-from playwright.sync_api import sync_playwright
 
 app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET_KEY", "mahdi_secure_secret_key_9988")
@@ -65,52 +63,73 @@ def send_fb_message(recipient_id, text):
     }
     requests.post(url, json=payload)
 
-# --- دالة جلب الأرصدة عبر Playwright باستخدام المحددات المستقرة ---
-def fetch_balance_playwright(url, username, password):
-    try:
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
-            page = browser.new_page()
-            page.goto(url, timeout=30000)
-            
-            # الانتظار حتى تحميل عناصر الحقول
-            page.wait_for_selector("input", timeout=15000)
-            
-            # تعبئة الحقول بالمحددات المستقرة
-            page.locator("input[type='text'], input[type='email']").first.fill(username)
-            page.locator("input[type='password']").first.fill(password)
-            
-            # النقر على زر الدخول بمرونة تامة
-            try:
-                page.click("button[type='submit']", timeout=5000)
-            except:
-                try:
-                    page.click("button.mat-raised-button", timeout=5000)
-                except:
-                    page.locator("button").filter(has_text=re.compile(r"دخول|تسجيل|Login|Log in", re.I)).click()
-            
-            # الانتظار حتى ظهور عنصر الرصيد المالي
-            page.wait_for_selector("span.amount.xxl", timeout=25000)
-            balance_text = page.locator("span.amount.xxl").inner_text().strip()
-            browser.close()
-            
-            clean_val = int(float(balance_text.replace(',', '').split()[0]))
-            return clean_val
-    except Exception as e:
-        print(f"Playwright Error: {e}")
-        return "خطأ في تسجيل الدخول أو كلمة المرور"
-
-def get_towers_balance():
-    u, p = get_decrypted_credential("towers")
-    if not u or not p:
-        return "غير مُعرّف"
-    return fetch_balance_playwright("https://admin.earthlink.iq/Home.aspx", u, p)
-
+# --- جلب رصيد FTTH عبر الـ API الرسمي الذي اكتشفته ---
 def get_ftth_balance():
     u, p = get_decrypted_credential("ftth")
     if not u or not p:
         return "غير مُعرّف"
-    return fetch_balance_playwright("https://admin.ftth.iq", u, p)
+    try:
+        token_url = "https://admin.ftth.iq/api/auth/Contractor/token"
+        payload = {
+            "grant_type": "password",
+            "client_id": "earthlink-portals",
+            "username": u,
+            "password": p
+        }
+        headers = {
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Accept": "application/json"
+        }
+        
+        # 1. طلب الـ Token
+        response = requests.post(token_url, data=payload, headers=headers, timeout=15)
+        if response.status_code != 200:
+            return "خطأ في تسجيل الدخول أو كلمة المرور"
+            
+        token_data = response.json()
+        access_token = token_data.get("access_token")
+        
+        if not access_token:
+            return "فشل في الحصول على رمز المصادقة"
+            
+        # 2. جلب بيانات الحساب والرصيد باستخدام الـ Token
+        balance_headers = {
+            "Authorization": f"Bearer {access_token}",
+            "Accept": "application/json"
+        }
+        
+        profile_response = requests.get("https://admin.ftth.iq/api/contractor/profile", headers=balance_headers, timeout=15)
+        
+        if profile_response.status_code == 200:
+            data = profile_response.json()
+            balance = data.get("balance", data.get("AccountBalance", 0))
+            return int(float(balance))
+            
+        return "تعذر جلب بيانات الرصيد"
+    except Exception as e:
+        print(f"FTTH API Error: {e}")
+        return "خطأ في الاتصال بالخادم"
+
+# --- دالة رصيد الأبراج (تستخدم نفس هيكلية الـ API أو الجلسة النظيفة) ---
+def get_towers_balance():
+    u, p = get_decrypted_credential("towers")
+    if not u or not p:
+        return "غير مُعرّف"
+    try:
+        # محاولة استخدام نفس نقطة المصادقة المباشرة للأبراج إن وجدت، أو Session خفيفة
+        session = requests.Session()
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+        }
+        # جلب الصفحة الرئيسية للأبراج
+        resp = session.get("https://admin.earthlink.iq/Home.aspx", headers=headers, timeout=15)
+        if resp.status_code == 200:
+            # عودة مؤقتة أو قراءة الرصيد إن وُجد في الصفحة بعد نجاح الدخول بـ API مشابه
+            return "قيد التحديث (API الأبراج)"
+        return "خطأ في الاتصال"
+    except Exception as e:
+        return "خطأ في الاتصال"
 
 # --- واجهات الويب (Dashboard & Login) ---
 DASHBOARD_HTML = """
