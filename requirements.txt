@@ -2,3 +2,5 @@ Flask
 playwright
 cryptography
 gunicorn
+requests
+beautifulsoup4
