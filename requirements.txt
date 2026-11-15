@@ -2,3 +2,5 @@ Flask
 requests
 cryptography
 gunicorn
+cloudscraper
+urllib3
